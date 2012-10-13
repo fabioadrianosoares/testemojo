@@ -17,22 +17,6 @@ use ORLite 1.96 {
 			nome VARCHAR(100) NOT NULL)');
 	}
 };
-
-my $estados = [{sigla => 'ES', nome => 'Espírito Santo'}, 
-							 {sigla => 'MG', nome => 'Minas Gerais'}, 
-							 {sigla => 'RJ', nome => 'Rio de Janeiro'}, 
-							 {sigla => 'SP', nome => 'São Paulo'}];
-
-my $cidades = [{id => 1, estado => 'SP', nome => 'São Bernardo'},
-							 {id => 2, estado => 'SP', nome => 'São Caetano'},
-							 {id => 3, estado => 'SP', nome => 'Ribeirão Pires'},
-							 {id => 4, estado => 'SP', nome => 'São Paulo'},
-							 {id => 5, estado => 'SP', nome => 'Diadema'},
-							 {id => 6, estado => 'SP', nome => 'Osasco'},
-							 {id => 7, estado => 'MG', nome => 'Belo Horizonte'},
-							 {id => 8, estado => 'MG', nome => 'Santa Luzia'},
-							 {id => 9, estado => 'MG', nome => 'Betim'},
-							 {id => 10, estado => 'MG', nome => 'Contagem'}];
 							 
 # Documentation browser under "/perldoc"
 plugin 'PODRenderer';
@@ -431,8 +415,8 @@ __DATA__
 	<thead>
 		<tr>
 			<th class="span1"></th>
-			<th class="span1">Estado</th>
-			<th class="span6">Nome</th>
+			<th class="span2">Estado</th>
+			<th class="span5">Nome</th>
 		</tr>
 	</thead>
 	<tbody>
@@ -464,7 +448,7 @@ __DATA__
 			<select id="estado" name="estado">
 				<option value=""></option>
 				% for (@$estados) {
-					<option value="<%= $_->sigla %>"<%= $_->sigla eq $dados->estado->sigla ? ' selected' : '' %>><%= $_->nome %></option>
+					<option value="<%= $_->sigla %>"<%= $_->sigla eq ($acao eq 'A' ? $dados->estado->sigla : '') ? ' selected' : '' %>><%= $_->nome %></option>
 				% }
 			</select>
 		</div>

@@ -3,6 +3,21 @@ use Mojolicious::Lite;
 use Mojo::ByteStream;
 use utf8;
 
+use ORLite 1.96 {
+	package => 'Model',
+	file => 'dados.db',
+	create => sub {
+		my $dbh = shift;
+		$dbh->do('CREATE TABLE estado (
+			sigla CHAR(2) PRIMARY KEY NOT NULL,
+			nome VARCHAR(100) NOT NULL)');
+		$dbh->do('CREATE TABLE cidade (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			estado CHAR(2) NOT NULL REFERENCES estado (sigla),
+			nome VARCHAR(100) NOT NULL)');
+	}
+};
+
 my $estados = [{sigla => 'ES', nome => 'Espírito Santo'}, 
 							 {sigla => 'MG', nome => 'Minas Gerais'}, 
 							 {sigla => 'RJ', nome => 'Rio de Janeiro'}, 
@@ -54,7 +69,7 @@ get '/' => sub {
 
 get '/estado' => sub {
 	my $self = shift;
-	$self->render('estado/listar', dados => $estados);
+	$self->render('estado/listar', dados => scalar Model::Estado->select('order by sigla'));
 };
 
 any ['get', 'post'] => '/estado/editar/:sigla' => {sigla => undef} => sub {
@@ -65,59 +80,67 @@ any ['get', 'post'] => '/estado/editar/:sigla' => {sigla => undef} => sub {
 		my $sigla = $self->param('sigla');
 
 		if (defined($sigla)) {
-			for (@$estados) {
-				if ($_->{sigla} eq $sigla) {
-					$estado = $_;
-					$acao = 'A';
-					last;
-				}
+			$estado = shift @{Model::Estado->select('where sigla = ?', uc $sigla)};
+			unless (defined($estado)) {
+				$self->redirect_erro('/estado', "Estado não encontrado para a sigla '$sigla'.");
+				return;
 			}
+			$acao = 'A';
 		} else {
-			$estado = {sigla => '', nome => ''};
+			$estado = Model::Estado->new(sigla => '', nome => '');
 			$acao = 'I';
 		}
 
-		if (defined($estado)) {
-			$self->render('estado/editar', 
-				dados => $estado, 
-				acao => $acao);
-		} else {
-			$self->redirect_erro('/estado', "Estado não encontrado para a sigla '$sigla'.");
-		}
+		$self->render('estado/editar', 
+			dados => $estado, 
+			acao => $acao);
+			
 	} else { # POST
-		$acao = uc($self->req->param('acao'));
-		$estado = {sigla => uc($self->req->param('sigla')), 
-			nome => $self->req->param('nome')}; 
+		$acao = uc $self->req->param('acao');
+		my $sigla = uc $self->req->param('sigla');
+		my $nome = $self->req->param('nome');
 		my $mensagem = undef;
 
-		unless ($mensagem || $estado->{sigla} =~ /^[A-Z]{2}$/) {
-			 $mensagem = 'Informe a sigla do estado';
-		}
-
-		unless ($mensagem || $estado->{nome} =~ /^\w{2}/) {
-			 $mensagem = 'Informe o nome do estado';
-		}
-
 		unless ($mensagem || $acao =~ /^[AI]$/) {
-			 $mensagem = 'Ação inválida';
+			$mensagem = 'Ação inválida';
+		}
+
+		unless ($mensagem || $sigla =~ /^[A-Z]{2}$/) {
+			$mensagem = 'Informe a sigla do estado';
+		}
+
+		unless ($mensagem || $nome =~ /^\w{2}/) {
+			$mensagem = 'Informe o nome do estado';
 		}
 		
-		# todo: ja existe estado com a sigla
-		if (!defined($mensagem) && $acao eq 'I' && $estado->{sigla} eq 'SP') {
-			 $mensagem = 'Estado já cadastrado';
+		unless ($mensagem) {
+			if (Model::Estado->count('where sigla = ?', $sigla)) {
+				if ($acao eq 'I') {
+					$mensagem = 'Estado já cadastrado';
+				}
+			} else {
+				if ($acao eq 'A') {
+					$mensagem = 'Estado não encontrado';
+				}
+			}
 		}
-
+		
 		if ($mensagem) {
 			$self->render('estado/editar', 
-				dados => $estado, 
+				dados => Model::Estado->new(sigla => $sigla, nome => $nome), 
 				acao => $acao,
 				mensagem_erro => $mensagem);
-		} else {
-			if ($acao eq 'I') {
-				$self->redirect_sucesso('/estado', 'Registro incluído com sucesso.');
-			} else {
-				$self->redirect_sucesso('/estado', 'Registro atualizado com sucesso.');
-			}
+			return;
+		} 
+
+		utf8::decode($nome);
+		if ($acao eq 'I') {
+			Model::Estado->create(sigla => $sigla, 
+				nome => $nome);
+			$self->redirect_sucesso('/estado', 'Registro incluído com sucesso.');
+		} elsif ($acao eq 'A') {
+			Model->do('update estado set nome = ? where sigla = ?', {}, $nome, $sigla);
+			$self->redirect_sucesso('/estado', 'Registro atualizado com sucesso.');
 		}
 	}
 };
@@ -125,10 +148,14 @@ any ['get', 'post'] => '/estado/editar/:sigla' => {sigla => undef} => sub {
 get '/estado/excluir/:sigla' => sub {
 	my $self = shift;
 	my $sigla = $self->param('sigla');
-	if ($sigla eq 'SP') {
+	if (Model::Cidade->count('where estado = ?', $sigla)) {
 		$self->redirect_erro("/estado", "Não é possível excluir o estado '$sigla' porque existem cidades cadastradas.");
 	} else {
-		$self->redirect_sucesso('/estado', 'Registro excluído com sucesso.');
+		if (Model::Estado->delete_where('sigla = ?', $sigla)) {
+			$self->redirect_sucesso('/estado', 'Registro excluído com sucesso.');
+		} else {
+			$self->redirect_erro("/estado", "Falha ao excluir o estado '$sigla'.");
+		}
 	}
 };
 
@@ -140,7 +167,7 @@ any ['get', 'post'] => '/cidade' => sub {
 		my $pesquisa = $self->req->param('pesquisa');
 		my $fitrado = [];
 		if ($pesquisa) {
-			$fitrado = [grep {$_->{nome} =~ /$pesquisa/i} @$cidades];
+			$fitrado = Model::Cidade->select('where nome like ?', "%$pesquisa%");
 		}
 		$self->render('cidade/listar', 
 			dados => $fitrado, 
@@ -148,7 +175,6 @@ any ['get', 'post'] => '/cidade' => sub {
 	}
 };
 
-#
 any ['get', 'post'] => '/cidade/editar/:id' => [id => qr/\d+/] => {id => undef} => sub {
 	my $self = shift;
 	my $acao = undef;
@@ -157,66 +183,73 @@ any ['get', 'post'] => '/cidade/editar/:id' => [id => qr/\d+/] => {id => undef} 
 		my $id = $self->param('id');
 
 		if (defined($id)) {
-			for (@$cidades) {
-				if ($_->{id} eq $id) {
-					$cidade = $_;
-					$acao = 'A';
-					last;
-				}
+			$cidade = shift @{Model::Cidade->select('where id = ?', $id)};
+			unless (defined($cidade)) {
+				$self->redirect_erro('/cidade', 'Cidade não encontrada.');
+				return;
 			}
+			$acao = 'A';
 		} else {
-			$cidade = {id => '', estado => '', nome => ''};
+			$cidade = Model::Cidade->new(id => '', estado => '', nome => '');
 			$acao = 'I';
 		}
 
-		if (defined($cidade)) {
-			$self->render('cidade/editar', 
-				estados => $estados, 
-				dados => $cidade, 
-				acao => $acao);
-		} else {
-			$self->redirect_erro('/cidade', 'Cidade não encontrada.');
-		}
+		$self->render('cidade/editar', 
+			estados => scalar Model::Estado->select('order by sigla'), 
+			dados => $cidade, 
+			acao => $acao);
+
 	} else { # POST
 		$acao = uc($self->req->param('acao'));
-		$cidade = {id => $self->req->param('id'), 
-			estado => uc($self->req->param('estado')), 
-			nome => $self->req->param('nome')}; 
+		my $id = $self->req->param('id');
+		my $estado = $self->req->param('estado'); 
+		my $nome = $self->req->param('nome'); 
 		my $mensagem = undef;
 
-		if (!defined($mensagem) && $acao eq 'A' && $cidade->{id} !~ /^\d+$/) {
-			 $mensagem = 'Id inválido';
-		}
-
-		unless ($mensagem || $cidade->{estado} =~ /^[A-Z]{2}$/) {
-			 $mensagem = 'Selecione o estado';
-		}
-
-		unless ($mensagem || $cidade->{nome} =~ /^\w{2}/) {
-			 $mensagem = 'Informe o nome da cidade';
-		}
-
 		unless ($mensagem || $acao =~ /^[AI]$/) {
-			 $mensagem = 'Ação inválida';
+			$mensagem = 'Ação inválida';
 		}
 		
-		# todo: ja existe cidade com o mesmo nome no estado
-		if (!defined($mensagem) && $acao eq 'I' && $cidade->{estado} eq 'RJ') {
-			 $mensagem = 'Já existe uma cidade com o mesmo nome este estado.';
+		if (!defined($mensagem) && $acao eq 'A' && $id !~ /^\d+$/) {
+			$mensagem = 'Id inválido';
+		}
+
+		unless ($mensagem ||$estado =~ /^[A-Z]{2}$/) {
+			$mensagem = 'Selecione o estado';
+		}
+
+		unless ($mensagem || $nome =~ /^\w{2}/) {
+			$mensagem = 'Informe o nome da cidade';
+		}
+
+		unless ($mensagem || Model::Estado->count('where sigla = ?', $estado)) {
+			$mensagem = 'Estado não encontrado';
+		}
+		
+		utf8::decode($nome);
+		
+		unless (defined($mensagem)) {
+			if (Model::Cidade->count('where id <> ? and estado = ? and nome = ?', ($acao eq 'I' ? 0 : $id), $estado, $nome)) {
+				$mensagem = 'Já existe uma cidade com o mesmo nome este estado.';
+			}
 		}
 
 		if ($mensagem) {
 			$self->render('cidade/editar', 
-				estados => $estados, 
-				dados => $cidade, 
+				estados => scalar Model::Estado->select('order by sigla'), 
+				dados => Model::Cidade->new(id => $id, estado => $estado, nome => $nome), 
 				acao => $acao,
 				mensagem_erro => $mensagem);
-		} else {
-			if ($acao eq 'I') {
-				$self->redirect_sucesso('/cidade', 'Registro incluído com sucesso.');
-			} else {
-				$self->redirect_sucesso('/cidade', 'Registro atualizado com sucesso.');
-			}
+			return;
+		}
+		
+		if ($acao eq 'I') {
+			Model::Cidade->create(estado => $estado, 
+				nome => $nome);
+			$self->redirect_sucesso('/cidade', 'Registro incluído com sucesso.');
+		} elsif ($acao eq 'A') {
+			Model->do('update cidade set nome = ?, estado = ? where id = ?', {}, $nome, $estado, $id);
+			$self->redirect_sucesso('/cidade', 'Registro atualizado com sucesso.');
 		}
 	}
 };	
@@ -224,7 +257,11 @@ any ['get', 'post'] => '/cidade/editar/:id' => [id => qr/\d+/] => {id => undef} 
 get '/cidade/excluir/:id' => sub {
 	my $self = shift;
 	my $id = $self->param('id');
-	$self->redirect_sucesso('/cidade', 'Registro excluído com sucesso.');
+	if (Model::Cidade->delete_where('id = ?', $id)) {
+		$self->redirect_sucesso('/cidade', 'Registro excluído com sucesso.');
+	} else {
+		$self->redirect_sucesso('/cidade', 'Falha ao excluir a cidade.');
+	}	
 };
 		
 app->defaults(layout => 'default');
@@ -326,9 +363,9 @@ __DATA__
 	<tbody>
 		% for my $estado (@$dados) {
 		<tr>
-			<td class="botoes"><a href="/estado/editar/<%= $estado->{sigla} %>"><i class="icon-edit"></i></a></td>
-			<td><%= $estado->{sigla} %></a></td>
-			<td><%= $estado->{nome} %></td>
+			<td class="botoes"><a href="/estado/editar/<%= $estado->sigla %>"><i class="icon-edit"></i></a></td>
+			<td><%= $estado->sigla %></a></td>
+			<td><%= $estado->nome %></td>
 		</tr>
 		% }
 	</tbody>
@@ -348,23 +385,23 @@ __DATA__
 		<label class="control-label" for="sigla">Sigla:</label>
 		<div class="controls">
 			% if ($acao eq 'A') {
-				%= hidden_field sigla => $dados->{sigla}
-				<strong><%= $dados->{sigla}%></strong> 
+				%= hidden_field sigla => $dados->sigla
+				<strong><%= $dados->sigla%></strong> 
 			% } else {
-				<input type="text" class="input-mini" id="sigla" name="sigla" value="<%= $dados->{sigla} %>">
+				<input type="text" class="input-mini" id="sigla" name="sigla" value="<%= $dados->sigla %>">
 			% }
 		</div>
 	</div>
 	<div class="control-group">
 		<label class="control-label" for="nome">Nome: </label>
 		<div class="controls">
-			<input type="text" class="input-xlarge" id="nome" name="nome" value="<%= $dados->{nome} %>">
+			<input type="text" class="input-xlarge" id="nome" name="nome" value="<%= $dados->nome %>">
 		</div>
 	</div>
 	<div class="form-actions">
 		<button type="submit" class="btn btn-primary">Salvar</button>
 % if ($acao eq 'A') {
-		<a href="/estado/excluir/<%= $dados->{sigla}%>" onclick="$('#myModal').modal('show'); return false;" class="btn btn-danger">Excluir</a>
+		<a href="/estado/excluir/<%= $dados->sigla%>" onclick="$('#myModal').modal('show'); return false;" class="btn btn-danger">Excluir</a>
 % }
 	</div>	
 	<div class="modal hide" id="myModal">
@@ -377,7 +414,7 @@ __DATA__
 		</div>
 		<div class="modal-footer">
 			<a href="#" class="btn btn-primary" data-dismiss="modal">Cancelar</a>
-			<a href="/estado/excluir/<%= $dados->{sigla}%>" class="btn btn-danger">Excluir</a>
+			<a href="/estado/excluir/<%= $dados->sigla%>" class="btn btn-danger">Excluir</a>
 		</div>
 	</div>
 </form>
@@ -401,9 +438,9 @@ __DATA__
 	<tbody>
 		% for my $cidade (@$dados) {
 		<tr>
-			<td class="botoes"><a href="/cidade/editar/<%= $cidade->{id} %>"><i class="icon-edit"></i></a></td>
-			<td><%= $cidade->{estado} %></td>
-			<td><%= $cidade->{nome} %></td>
+			<td class="botoes"><a href="/cidade/editar/<%= $cidade->id %>"><i class="icon-edit"></i></a></td>
+			<td><%= $cidade->estado->nome %></td>
+			<td><%= $cidade->nome %></td>
 		</tr>
 		% }
 	</tbody>
@@ -420,14 +457,14 @@ __DATA__
 % }
 <form class="form-vertical" method="POST">
 	%= hidden_field acao => $acao
-	%= hidden_field id => $dados->{id}
+	%= hidden_field id => $dados->id
 	<div class="control-group">
 		<label class="control-label" for="sigla">Estado:</label>
 		<div class="controls">
 			<select id="estado" name="estado">
 				<option value=""></option>
 				% for (@$estados) {
-					<option value="<%= $_->{sigla} %>"<%= $_->{sigla} eq $dados->{estado} ? ' selected' : '' %>><%= $_->{nome} %></option>
+					<option value="<%= $_->sigla %>"<%= $_->sigla eq $dados->estado->sigla ? ' selected' : '' %>><%= $_->nome %></option>
 				% }
 			</select>
 		</div>
@@ -435,13 +472,13 @@ __DATA__
 	<div class="control-group">
 		<label class="control-label" for="nome">Nome: </label>
 		<div class="controls">
-			<input type="text" class="input-xlarge" id="nome" name="nome" value="<%= $dados->{nome} %>">
+			<input type="text" class="input-xlarge" id="nome" name="nome" value="<%= $dados->nome %>">
 		</div>
 	</div>
 	<div class="form-actions">
 		<button type="submit" class="btn btn-primary">Salvar</button>
 % if ($acao eq 'A') {
-		<a href="/cidade/excluir/<%= $dados->{id}%>" onclick="$('#myModal').modal('show'); return false;" class="btn btn-danger">Excluir</a>
+		<a href="/cidade/excluir/<%= $dados->id %>" onclick="$('#myModal').modal('show'); return false;" class="btn btn-danger">Excluir</a>
 % }
 	</div>	
 	<div class="modal hide" id="myModal">
@@ -454,7 +491,7 @@ __DATA__
 		</div>
 		<div class="modal-footer">
 			<a href="#" class="btn btn-primary" data-dismiss="modal">Cancelar</a>
-			<a href="/cidade/excluir/<%= $dados->{id}%>" class="btn btn-danger">Excluir</a>
+			<a href="/cidade/excluir/<%= $dados->id %>" class="btn btn-danger">Excluir</a>
 		</div>
 	</div>
 </form>

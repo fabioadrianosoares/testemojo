@@ -148,8 +148,8 @@ any ['get', 'post'] => '/cidade' => sub {
 	}
 };
 
-# => [id => qr/\d+/]
-any ['get', 'post'] => '/cidade/editar/:id' => {id => undef} => sub {
+#
+any ['get', 'post'] => '/cidade/editar/:id' => [id => qr/\d+/] => {id => undef} => sub {
 	my $self = shift;
 	my $acao = undef;
 	my $cidade = undef;
@@ -220,6 +220,12 @@ any ['get', 'post'] => '/cidade/editar/:id' => {id => undef} => sub {
 		}
 	}
 };	
+
+get '/cidade/excluir/:id' => sub {
+	my $self = shift;
+	my $id = $self->param('id');
+	$self->redirect_sucesso('/cidade', 'Registro excluído com sucesso.');
+};
 		
 app->defaults(layout => 'default');
 app->defaults(mensagem_erro => '');
@@ -378,7 +384,7 @@ __DATA__
 
 @@ cidade/listar.html.ep
 % stash menu => 'cidade';
-<form class="well form-search" method="POST"	>
+<form class="well form-search" method="POST" action="/cidade">
 	<input type="text" class="input-medium search-query" id="pesquisa" name="pesquisa" value="<%= param('pesquisa') %>">
 	<button type="submit" class="btn">Buscar</button>
 </form>

@@ -404,6 +404,14 @@ get '/cidade/excluir/:id' => sub {
 	}	
 };
 
+if (exists $ENV{'DATABASE_URL'}) {
+	if ($ENV{'DATABASE_URL'} =~ m|postgres://([^:]+):([^@]+)@([^:]+):([^/]+)/(.+)|) {
+		$ENV{'DBI_DSN'} = "dbi:Pg:dbname=$5;host=$3;port=$4";
+		$ENV{'APP_DB_USER'} = $1;
+		$ENV{'APP_DB_PASS'}	= $2;
+	}
+}
+
 plugin Config => {file => 'app.conf'};
 
 $ENV{'DBI_DSN'} ||= app->config->{database};
@@ -415,6 +423,8 @@ app->defaults(mensagem_erro => '');
 app->defaults(mensagem_sucesso => '');
 app->secret('sao seus olhos');
 app->mode('production');
+app->log->level('debug');
+app->log->debug('Conectar ao banco "' . $ENV{'DBI_DSN'} . '", com usuario "' . $ENV{'APP_DB_USER'} . '".');
 app->log->level('fatal');
 app->start;
 __DATA__

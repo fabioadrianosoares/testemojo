@@ -1,30 +1,180 @@
 #!/usr/bin/env perl
+
+package Model;
+use Mojo::Base -strict;
+use DBI;
+
+sub user { $ENV{'APP_DB_USER'} }
+sub pass { $ENV{'APP_DB_PASS'} }
+
+sub dbh {
+	$_[0]->connect;
+}
+
+sub connect {
+	my $dbh = DBI->connect_cached( undef, $_[0]->user, $_[0]->pass, {
+		PrintError => 0,
+		RaiseError => 1,
+	} );
+	$dbh->{pg_enable_utf8} = 1;
+	$dbh;
+}
+
+sub do {
+	shift->dbh->do(\@_);
+}
+
+1;
+
+package Model::Estado;
+
+use Mojo::Base -base;
+
+has 'sigla';
+has 'nome';
+
+sub find_all {
+	return __PACKAGE__->find_where;
+}
+	
+sub find_where {
+	shift;
+	my $where = shift; # $
+	my $attr = shift; # %
+	my $limit = defined($attr->{MaxRows}) ? ' LIMIT ' . $attr->{MaxRows} : '';
+	my $sth = Model->dbh->prepare('select sigla, nome from estado ' . ($where // ''). ' order by sigla' . $limit, $attr);
+	$sth->execute(@_);
+	my @rows;
+  while (my ($sigla, $nome) = $sth->fetchrow_array) {
+      push @rows, __PACKAGE__->new(
+				'sigla' => $sigla, 
+				'nome' => $nome);
+  }
+  wantarray ? @rows : \@rows;
+}
+
+sub load {				
+	shift;
+	return undef unless (@_);
+	my @rows = __PACKAGE__->find_where(' where sigla = ? ', {MaxRows => 1}, @_);
+	return shift @rows;
+}
+
+sub update {
+	my $self = shift;
+	my $sth = Model->dbh->prepare('update estado set nome = ? where sigla = ?');
+	$sth->execute($self->nome, $self->sigla);
+	$sth->finish;
+}
+
+sub delete {
+	my $self = shift;
+	my $sth = Model->dbh->prepare('delete from estado where sigla = ?');
+	$sth->execute($self->sigla);
+	$sth->finish;
+}
+
+sub create {
+	shift;
+	my $self = __PACKAGE__->new(@_);
+	my $sth = Model->dbh->prepare('insert into estado (sigla, nome) values (?, ?)');
+	$sth->execute($self->sigla, $self->nome);
+	$sth->finish;
+	$self;
+}
+
+sub existe_cidade {
+	shift;
+	return undef unless (@_);
+	my @rows = Model::Cidade->find_where(' where estado = ? ', {MaxRows => 1}, @_);
+	return shift @rows;
+}
+
+1;
+
+package Model::Cidade;
+
+use Mojo::Base -base;
+
+has 'id';
+has 'estado';
+has 'nome';
+
+sub find_by_nome {
+	shift;
+	return undef unless (@_);
+	my $nome = shift;
+	return __PACKAGE__->find_where('where nome like ?', undef, "%$nome%");
+}
+
+sub find_where {
+	shift;
+	my $where = shift; # $
+	my $attr = shift; # %
+	my $limit = defined($attr->{MaxRows}) ? ' LIMIT ' . $attr->{MaxRows} : '';
+	my $sth = Model->dbh->prepare('select id, estado, nome from cidade ' . ($where // ''). ' order by nome' . $limit, $attr);
+	$sth->execute(@_);
+	my @rows;
+  while (my ($id, $estado, $nome) = $sth->fetchrow_array) {
+      push @rows, __PACKAGE__->new(
+				'id' => $id, 
+				'estado' => $estado, 
+				'nome' => $nome);
+  }
+  wantarray ? @rows : \@rows;
+}
+
+sub load {				
+	shift;
+	return undef unless (@_);
+	my @rows = __PACKAGE__->find_where(' where id = ? ', {MaxRows => 1}, @_);
+	return shift @rows;
+}
+
+sub update {
+	my $self = shift;
+	my $sth = Model->dbh->prepare('update cidade set estado = ?, nome = ? where id = ?');
+	$sth->execute($self->estado, $self->nome, $self->id);
+	$sth->finish;
+}
+
+sub delete {
+	my $self = shift;
+	my $sth = Model->dbh->prepare('delete from cidade where id = ?');
+	$sth->execute($self->id);
+	$sth->finish;
+}
+
+sub create {
+	shift;
+	my $self = __PACKAGE__->new(@_);
+	my $dbh = Model->dbh;
+	my $sth = $dbh->prepare('insert into cidade (estado, nome) values (?, ?)');
+	$sth->execute($self->estado, $self->nome);
+	__PACKAGE__->id($dbh->last_insert_id(undef,undef,"cidade",undef));
+	$sth->finish;
+	$self;
+}
+
+sub existe_no_estado {
+	shift;
+	my @rows = __PACKAGE__->find_where('where id <> ? and estado = ? and nome = ?', {MaxRows => 1}, @_);
+	return shift @rows;
+}
+
+1;
+
+package main;
+
 use Mojolicious::Lite;
 use Mojo::ByteStream;
 use utf8;
-
-use ORLite 1.96 {
-	package => 'Model',
-	file => 'dados.db',
-	create => sub {
-		my $dbh = shift;
-		$dbh->do('CREATE TABLE estado (
-			sigla CHAR(2) PRIMARY KEY NOT NULL,
-			nome VARCHAR(100) NOT NULL)');
-		$dbh->do('CREATE TABLE cidade (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			estado CHAR(2) NOT NULL REFERENCES estado (sigla),
-			nome VARCHAR(100) NOT NULL)');
-	}
-};
-							 
-# Documentation browser under "/perldoc"
-plugin 'PODRenderer';
 
 helper menu_ativo => sub {
 	my ($self, $menu) = @_;
 	return ($self->stash('menu') eq $menu) ? Mojo::ByteStream->new(' class="active"') : '';
 };
+
 
 helper redirect_erro => sub {
 	my ($self, $caminho, $mensagem) = @_;
@@ -53,7 +203,7 @@ get '/' => sub {
 
 get '/estado' => sub {
 	my $self = shift;
-	$self->render('estado/listar', dados => scalar Model::Estado->select('order by sigla'));
+	$self->render('estado/listar', dados => scalar Model::Estado->find_all);
 };
 
 any ['get', 'post'] => '/estado/editar/:sigla' => {sigla => undef} => sub {
@@ -64,7 +214,7 @@ any ['get', 'post'] => '/estado/editar/:sigla' => {sigla => undef} => sub {
 		my $sigla = $self->param('sigla');
 
 		if (defined($sigla)) {
-			$estado = shift @{Model::Estado->select('where sigla = ?', uc $sigla)};
+			$estado = Model::Estado->load(uc $sigla);
 			unless (defined($estado)) {
 				$self->redirect_erro('/estado', "Estado não encontrado para a sigla '$sigla'.");
 				return;
@@ -98,7 +248,8 @@ any ['get', 'post'] => '/estado/editar/:sigla' => {sigla => undef} => sub {
 		}
 		
 		unless ($mensagem) {
-			if (Model::Estado->count('where sigla = ?', $sigla)) {
+			$estado = Model::Estado->load($sigla);
+			if (defined($estado)) {
 				if ($acao eq 'I') {
 					$mensagem = 'Estado já cadastrado';
 				}
@@ -117,13 +268,13 @@ any ['get', 'post'] => '/estado/editar/:sigla' => {sigla => undef} => sub {
 			return;
 		} 
 
-		utf8::decode($nome);
 		if ($acao eq 'I') {
 			Model::Estado->create(sigla => $sigla, 
 				nome => $nome);
 			$self->redirect_sucesso('/estado', 'Registro incluído com sucesso.');
 		} elsif ($acao eq 'A') {
-			Model->do('update estado set nome = ? where sigla = ?', {}, $nome, $sigla);
+			$estado->nome($nome);
+			$estado->update;
 			$self->redirect_sucesso('/estado', 'Registro atualizado com sucesso.');
 		}
 	}
@@ -131,11 +282,13 @@ any ['get', 'post'] => '/estado/editar/:sigla' => {sigla => undef} => sub {
 
 get '/estado/excluir/:sigla' => sub {
 	my $self = shift;
-	my $sigla = $self->param('sigla');
-	if (Model::Cidade->count('where estado = ?', $sigla)) {
-		$self->redirect_erro("/estado", "Não é possível excluir o estado '$sigla' porque existem cidades cadastradas.");
+	my $sigla = uc $self->param('sigla');
+	if (Model::Estado->existe_cidade($sigla)) {
+		$self->redirect_erro("/estado", "Não é possível excluir o estado '$sigla' porque existe cidade cadastrada.");
 	} else {
-		if (Model::Estado->delete_where('sigla = ?', $sigla)) {
+		my $estado = Model::Estado->load($sigla);
+		if ($estado) {
+			$estado->delete;
 			$self->redirect_sucesso('/estado', 'Registro excluído com sucesso.');
 		} else {
 			$self->redirect_erro("/estado", "Falha ao excluir o estado '$sigla'.");
@@ -151,7 +304,7 @@ any ['get', 'post'] => '/cidade' => sub {
 		my $pesquisa = $self->req->param('pesquisa');
 		my $fitrado = [];
 		if ($pesquisa) {
-			$fitrado = Model::Cidade->select('where nome like ?', "%$pesquisa%");
+			$fitrado = Model::Cidade->find_by_nome($pesquisa);
 		}
 		$self->render('cidade/listar', 
 			dados => $fitrado, 
@@ -167,7 +320,7 @@ any ['get', 'post'] => '/cidade/editar/:id' => [id => qr/\d+/] => {id => undef} 
 		my $id = $self->param('id');
 
 		if (defined($id)) {
-			$cidade = shift @{Model::Cidade->select('where id = ?', $id)};
+			$cidade = Model::Cidade->load($id);
 			unless (defined($cidade)) {
 				$self->redirect_erro('/cidade', 'Cidade não encontrada.');
 				return;
@@ -179,7 +332,7 @@ any ['get', 'post'] => '/cidade/editar/:id' => [id => qr/\d+/] => {id => undef} 
 		}
 
 		$self->render('cidade/editar', 
-			estados => scalar Model::Estado->select('order by sigla'), 
+			estados => scalar Model::Estado->find_all, 
 			dados => $cidade, 
 			acao => $acao);
 
@@ -206,21 +359,19 @@ any ['get', 'post'] => '/cidade/editar/:id' => [id => qr/\d+/] => {id => undef} 
 			$mensagem = 'Informe o nome da cidade';
 		}
 
-		unless ($mensagem || Model::Estado->count('where sigla = ?', $estado)) {
+		unless ($mensagem || Model::Estado->load($estado)) {
 			$mensagem = 'Estado não encontrado';
 		}
 		
-		utf8::decode($nome);
-		
 		unless (defined($mensagem)) {
-			if (Model::Cidade->count('where id <> ? and estado = ? and nome = ?', ($acao eq 'I' ? 0 : $id), $estado, $nome)) {
+			if (Model::Cidade->existe_no_estado(($acao eq 'I' ? 0 : $id), $estado, $nome)) {
 				$mensagem = 'Já existe uma cidade com o mesmo nome este estado.';
 			}
 		}
 
 		if ($mensagem) {
 			$self->render('cidade/editar', 
-				estados => scalar Model::Estado->select('order by sigla'), 
+				estados => scalar Model::Estado->find_all, 
 				dados => Model::Cidade->new(id => $id, estado => $estado, nome => $nome), 
 				acao => $acao,
 				mensagem_erro => $mensagem);
@@ -232,7 +383,10 @@ any ['get', 'post'] => '/cidade/editar/:id' => [id => qr/\d+/] => {id => undef} 
 				nome => $nome);
 			$self->redirect_sucesso('/cidade', 'Registro incluído com sucesso.');
 		} elsif ($acao eq 'A') {
-			Model->do('update cidade set nome = ?, estado = ? where id = ?', {}, $nome, $estado, $id);
+			$cidade = Model::Cidade->load($id);
+			$cidade->estado($estado);
+			$cidade->nome($nome);
+			$cidade->update;			
 			$self->redirect_sucesso('/cidade', 'Registro atualizado com sucesso.');
 		}
 	}
@@ -241,17 +395,27 @@ any ['get', 'post'] => '/cidade/editar/:id' => [id => qr/\d+/] => {id => undef} 
 get '/cidade/excluir/:id' => sub {
 	my $self = shift;
 	my $id = $self->param('id');
-	if (Model::Cidade->delete_where('id = ?', $id)) {
+	my $cidade = Model::Cidade->load($id);
+	if ($cidade) {
+		$cidade->delete;
 		$self->redirect_sucesso('/cidade', 'Registro excluído com sucesso.');
 	} else {
 		$self->redirect_sucesso('/cidade', 'Falha ao excluir a cidade.');
 	}	
 };
-		
+
+plugin Config => {file => 'app.conf'};
+
+$ENV{'DBI_DSN'} ||= app->config->{database};
+$ENV{'APP_DB_USER'} ||= app->config->{user};
+$ENV{'APP_DB_PASS'} ||= app->config->{pass};
+
 app->defaults(layout => 'default');
 app->defaults(mensagem_erro => '');
 app->defaults(mensagem_sucesso => '');
 app->secret('sao seus olhos');
+app->mode('production');
+app->log->level('fatal');
 app->start;
 __DATA__
 
@@ -423,7 +587,7 @@ __DATA__
 		% for my $cidade (@$dados) {
 		<tr>
 			<td class="botoes"><a href="/cidade/editar/<%= $cidade->id %>"><i class="icon-edit"></i></a></td>
-			<td><%= $cidade->estado->nome %></td>
+			<td><%= $cidade->estado %></td>
 			<td><%= $cidade->nome %></td>
 		</tr>
 		% }
@@ -448,7 +612,7 @@ __DATA__
 			<select id="estado" name="estado">
 				<option value=""></option>
 				% for (@$estados) {
-					<option value="<%= $_->sigla %>"<%= $_->sigla eq ($acao eq 'A' ? $dados->estado->sigla : '') ? ' selected' : '' %>><%= $_->nome %></option>
+					<option value="<%= $_->sigla %>"<%= $_->sigla eq $dados->estado ? ' selected' : '' %>><%= $_->nome %></option>
 				% }
 			</select>
 		</div>

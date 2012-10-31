@@ -1,0 +1,46 @@
+% stash menu => 'cidade';
+% if ($acao eq 'A') {
+	<h3>Editar Cidade</h3> 
+% } else {
+	<h3>Nova Cidade</h3> 
+% }
+<form class="form-vertical" method="POST">
+	%= hidden_field acao => $acao
+	%= hidden_field id => $dados->id
+	<div class="control-group">
+		<label class="control-label" for="sigla">Estado:</label>
+		<div class="controls">
+			<select id="estado" name="estado">
+				<option value=""></option>
+				% for (@$estados) {
+					<option value="<%= $_->sigla %>"<%= $_->sigla eq $dados->estado ? ' selected' : '' %>><%= $_->nome %></option>
+				% }
+			</select>
+		</div>
+	</div>
+	<div class="control-group">
+		<label class="control-label" for="nome">Nome: </label>
+		<div class="controls">
+			<input type="text" class="input-xlarge" id="nome" name="nome" value="<%= $dados->nome %>">
+		</div>
+	</div>
+	<div class="form-actions">
+		<button type="submit" class="btn btn-primary">Salvar</button>
+% if ($acao eq 'A') {
+		<a href="/cidade/excluir/<%= $dados->id %>" onclick="$('#myModal').modal('show'); return false;" class="btn btn-danger">Excluir</a>
+% }
+	</div>	
+	<div class="modal hide" id="myModal">
+		<div class="modal-header">
+			<button type="button" class="close" data-dismiss="modal">×</button>
+			<h3>Excluir Cidade</h3>
+		</div>
+		<div class="modal-body">
+			<p>Confirma a exclusão da cidade?</p>
+		</div>
+		<div class="modal-footer">
+			<a href="#" class="btn btn-primary" data-dismiss="modal">Cancelar</a>
+			<a href="/cidade/excluir/<%= $dados->id %>" class="btn btn-danger">Excluir</a>
+		</div>
+	</div>
+</form>
